@@ -1,0 +1,130 @@
+##
+# Rakefile to help with photo downloading from cards/cameras.
+#
+# Tasks for copying from photo source +CARD+ to staging area +STGE+ and
+# from staging area to photo library +DEST+.
+#
+# Copying from card flattens directory structures to leave files in staging
+# area. Copying to library copies into yyyy/mm/dd structure.
+#
+# +rake clean+ will remove staged photos and videos.
+# +rake clobbber+ will remove photos and videos from the card/camera.
+#
+# Future enhancements will probably include copying to a website. That will
+# require some tagging mechanism to select photos for publish. Probably that
+# will use shotwell or f-spot and their tag database.
+#
+#
+
+require 'exifr'
+require 'rake/clean'
+
+DEST='.'
+VDEST='Videos'
+STGE='/home/edd/tmp/photo-staging' # local will auto-import
+VSTGE=STGE
+#CARD='/media/usb0'
+CARD='/media/F84E-1690'
+#CARD='/media/E85B-981C'
+
+STAGED_PHOTOS=FileList.new("#{STGE}/*.JPG")
+CARD_PHOTOS=FileList.new("#{CARD}/**/*.JPG")
+CLEAN << STAGED_PHOTOS
+CLOBBER << CARD_PHOTOS
+
+STAGED_VIDEOS=FileList.new("#{VSTGE}/*.MOV")
+CARD_VIDEOS=FileList.new("#{CARD}/**/*.MOV")
+CLEAN << STAGED_VIDEOS
+CLOBBER << CARD_VIDEOS
+
+directory STGE
+directory VSTGE
+directory DEST
+directory VDEST
+
+desc "By default, download everything on the card and copy to library"
+task :default => [:stage, :order]
+
+desc "Copy photos and videos on card to staging area"
+task :stage => [:stage_photos, :stage_videos]
+
+task :stage_photos => STGE do
+  copy_files_as_rake_dependents("stage", CARD_PHOTOS) do |p|
+    File.join(STGE, p.pathmap("%f"))
+  end
+end
+
+task :stage_videos => VSTGE do
+  copy_files_as_rake_dependents("stage", CARD_VIDEOS) do |v|
+    File.join(VSTGE, v.pathmap("%f"))
+  end
+end
+
+desc "Copy staged photos and videos to ordered directory"
+task :order => [:order_photos, :order_videos]
+
+task :order_photos => DEST do
+  copy_files_as_rake_dependents("order", STAGED_PHOTOS) do |p|
+    File.join(DEST, date_folder(photo_time(p)), p.pathmap("%f"))
+  end
+end
+
+task :order_videos => VDEST do
+  copy_files_as_rake_dependents("order", STAGED_VIDEOS) do |v|
+    File.join(VDEST, date_folder(video_time(v)), v.pathmap("%f"))
+  end
+end
+
+private
+
+def pad0 name
+  if name.length < 2
+    "0#{name}"
+  else
+    name
+  end
+end
+
+def photo_time photo
+  EXIFR::JPEG.new(photo).date_time
+end
+
+def video_time video
+  File.new(video).ctime
+end
+
+def date_folder time
+  File.join time.year.to_s, pad0(time.month.to_s), pad0(time.day.to_s)
+end
+
+
+##
+# Copy a list of files to destination, if they don't already exist. The
+# destination is calculated based on the provided +transform+ block.
+#
+# Destination directories will be created as required too.
+#
+def copy_files_as_rake_dependents(id, src_list, &transform)
+  considered = 0
+  performed = 0
+  taskname = ("perform_" + id + "-" + rand.to_s[5..8]).to_sym
+  task taskname # empty, in case source list doesn't create it.
+  src_list.each do |source|
+    dest = transform.call(source)
+
+    file dest => source do 
+      cp source, dest
+      performed = performed.succ
+    end
+
+    d = dest.pathmap("%d")
+    directory d
+    file dest => d
+    task taskname => dest
+    considered = considered.succ
+  end
+
+  puts "#{considered} files considered."
+  Rake::Task[taskname].invoke
+  puts "#{performed} files #{id.chomp('e') + 'ed.'}"
+end
